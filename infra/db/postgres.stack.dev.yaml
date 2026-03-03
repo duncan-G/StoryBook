@@ -1,0 +1,39 @@
+version: "3.8"
+
+services:
+  app:
+    image: umt/postgres:latest
+    environment:
+      POSTGRES_DB: $DATABASE_NAME
+      POSTGRES_USER: $DATABASE_USER
+      POSTGRES_PASSWORD: $DATABASE_PASSWORD
+    command: [
+      "postgres",
+      "-c", "shared_preload_libraries=pg_cron",
+      "-c", "cron.database_name=$DATABASE_NAME"
+    ]
+    ports:
+      - "5432:5432"
+    networks:
+      - net
+    volumes:
+      - db_data:/var/lib/postgresql
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 15s
+        order: stop-first
+networks:
+  net:
+    external: true
+volumes:
+  db_data:
+    driver: local

@@ -1,0 +1,40 @@
+# Aspire dashboard for OpenTelemetry (traces, metrics, logs).
+# OTLP gRPC: 4317, OTLP HTTP: 4318. Dashboard UI: 18888.
+# Apps (e.g. screenplay-viewer): set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+# and NEXT_PUBLIC_OTLP_HTTP_ENDPOINT=http://localhost:4318/v1 for browser telemetry.
+version: "3.8"
+
+services:
+  app:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
+    ports:
+      - "18888:18888"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      ASPIRE_DASHBOARD_OTLP_ENDPOINT_URL: "http://[::]:4317"
+      ASPIRE_DASHBOARD_OTLP_HTTP_ENDPOINT_URL: "http://[::]:4318"
+      DASHBOARD__OTLP__CORS__ALLOWEDORIGINS: "http://localhost:3000"
+      DASHBOARD__OTLP__CORS__ALLOWEDHEADERS: "content-type,authorization"
+      DASHBOARD__TELEMETRYLIMITS__MAXLOGCOUNT: "100000"
+      DASHBOARD__TELEMETRYLIMITS__MAXTRACECOUNT: "100000"
+      DASHBOARD__TELEMETRYLIMITS__MAXMETRICSCOUNT: "100000"
+      Dashboard__Frontend__BrowserToken: "${ASPIRE_BROWSER_TOKEN}"
+    networks:
+      - net
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 15s
+        order: stop-first
+networks:
+  net:
+    external: true

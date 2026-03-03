@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  app:
+    image: prom/prometheus:latest
+    networks:
+      - net
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 15s
+        order: stop-first
+
+networks:
+  net:
+    external: true

@@ -1,0 +1,28 @@
+[project]
+name = "screenplay-parser"
+version = "0.1.0"
+description = "Screenplay-aware PDF parser with FastAPI service"
+requires-python = ">=3.12"
+dependencies = [
+    "uuid7-standard",
+    "python-dotenv",
+    "fastapi",
+    "uvicorn[standard]",
+    "pdfminer.six",
+    "python-multipart",
+    "pydantic>=2",
+    "sqlalchemy[asyncio]>=2",
+    "asyncpg",
+    "pgvector",
+    "google-genai",
+    "sentencepiece",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-instrumentation-logging",
+    "opentelemetry-instrumentation-sqlalchemy",
+]
+
+[tool.setuptools]
+py-modules = ["main", "screenplay_parser", "gemini_qa", "chunking", "store", "database", "models", "telemetry"]
