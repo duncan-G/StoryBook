@@ -1,0 +1,230 @@
+@use "tailwindcss";
+
+// ---------------------------------------------------------------------------
+// shadcn-style CSS variable theming
+// ---------------------------------------------------------------------------
+
+:root {
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+
+  --card: #f9fafb;
+  --card-foreground: #0a0a0a;
+
+  --primary: #d97706;
+  --primary-foreground: #ffffff;
+
+  --secondary: #f3f4f6;
+  --secondary-foreground: #1f2937;
+
+  --muted: #e5e7eb;
+  --muted-foreground: #6b7280;
+
+  --accent: #f3f4f6;
+  --accent-foreground: #111827;
+
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+
+  --border: #d1d5db;
+  --input: #d1d5db;
+  --ring: #d97706;
+
+  --scene-heading: #92400e;
+  --action-text: #374151;
+  --dialogue-text: #1f2937;
+  --vo-text: #1d4ed8;
+  --paren-text: #6b7280;
+  --transition-text: #9ca3af;
+  --char-cue: #4b5563;
+  --char-pill-bg: #e5e7eb;
+  --char-pill-text: #4b5563;
+
+  --scene-badge-bg: rgba(217, 119, 6, 0.12);
+  --scene-badge-text: #92400e;
+  --loc-badge-bg: #e5e7eb;
+  --loc-badge-text: #6b7280;
+
+  --dot-active: #d97706;
+  --dot-inactive: #d1d5db;
+  --dot-hover: #9ca3af;
+  --nav-panel-bg: rgba(255, 255, 255, 0.85);
+
+  --scrollbar-thumb: #4b5563;
+  --scrollbar-thumb-hover: #374151;
+}
+
+.dark {
+  --background: #09090b;
+  --foreground: #f4f4f5;
+
+  --card: #18181b;
+  --card-foreground: #f4f4f5;
+
+  --primary: #f59e0b;
+  --primary-foreground: #09090b;
+
+  --secondary: #27272a;
+  --secondary-foreground: #f4f4f5;
+
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+
+  --accent: #27272a;
+  --accent-foreground: #f4f4f5;
+
+  --destructive: #dc2626;
+  --destructive-foreground: #f4f4f5;
+
+  --border: #27272a;
+  --input: #27272a;
+  --ring: #f59e0b;
+
+  --scene-heading: #fbbf24;
+  --action-text: #d4d4d8;
+  --dialogue-text: #e4e4e7;
+  --vo-text: #93c5fd;
+  --paren-text: #71717a;
+  --transition-text: #71717a;
+  --char-cue: #a1a1aa;
+  --char-pill-bg: #27272a;
+  --char-pill-text: #a1a1aa;
+
+  --scene-badge-bg: rgba(245, 158, 11, 0.2);
+  --scene-badge-text: #fbbf24;
+  --loc-badge-bg: #27272a;
+  --loc-badge-text: #a1a1aa;
+
+  --dot-active: #f59e0b;
+  --dot-inactive: #52525b;
+  --dot-hover: #a1a1aa;
+  --nav-panel-bg: rgba(24, 24, 27, 0.85);
+
+  --scrollbar-thumb: #a1a1aa;
+  --scrollbar-thumb-hover: #d4d4d8;
+}
+
+// Register as Tailwind theme tokens so utilities like bg-background work
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-scene-heading: var(--scene-heading);
+  --color-action-text: var(--action-text);
+  --color-dialogue-text: var(--dialogue-text);
+  --color-vo-text: var(--vo-text);
+  --color-paren-text: var(--paren-text);
+  --color-transition-text: var(--transition-text);
+  --color-char-cue: var(--char-cue);
+  --color-char-pill-bg: var(--char-pill-bg);
+  --color-char-pill-text: var(--char-pill-text);
+
+  --color-scene-badge-bg: var(--scene-badge-bg);
+  --color-scene-badge-text: var(--scene-badge-text);
+  --color-loc-badge-bg: var(--loc-badge-bg);
+  --color-loc-badge-text: var(--loc-badge-text);
+
+  --color-dot-active: var(--dot-active);
+  --color-dot-inactive: var(--dot-inactive);
+  --color-dot-hover: var(--dot-hover);
+  --color-nav-panel-bg: var(--nav-panel-bg);
+
+  --font-mono: var(--font-geist-mono);
+}
+
+// ---------------------------------------------------------------------------
+// Base
+// ---------------------------------------------------------------------------
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+button {
+  cursor: pointer;
+
+  &:disabled {
+    cursor: default;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scrollbar
+// ---------------------------------------------------------------------------
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border-radius: 3px;
+
+  &:hover {
+    background: var(--muted-foreground);
+  }
+}
+
+/* Vertical layout: larger, more visible scrollbar (darker in light mode, brighter in dark) */
+.vertical-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+
+  &::-webkit-scrollbar {
+    width: 12px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 6px;
+
+    &:hover {
+      background: var(--scrollbar-thumb-hover);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Number-input spinners
+// ---------------------------------------------------------------------------
+
+input[type="number"] {
+  -moz-appearance: textfield;
+
+  &::-webkit-inner-spin-button,
+  &::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+}

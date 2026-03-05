@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.devcontainer/
+
+# Generated proto files (optional - you may want to include these)
+# proto/*_pb2.py
+# proto/*_pb2_grpc.py
+
+# Docker
+.dockerignore
+
+# Environment variables
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pretrained models
+.models/
+
+# Local audio outputs
+scripts/audio_outputs/
+
+# SSH keys and helper script
+*.pem
+.ssh.sh

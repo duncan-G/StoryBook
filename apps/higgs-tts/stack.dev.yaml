@@ -1,0 +1,36 @@
+# Higgs TTS / Audio inference gRPC server. Expects overlay network "net".
+# Build: docker build -t umt/higgs-tts:latest .
+# Deploy: docker stack deploy -c stack.dev.yaml higgs_tts
+# Env (optional): HOST, PORT, OTEL_EXPORTER_OTLP_ENDPOINT
+version: "3.8"
+
+services:
+  app:
+    image: umt/higgs-tts:latest
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "50051"
+      # OTLP gRPC (this app uses proto-grpc exporter). Aspire: 4317 = gRPC, 4318 = HTTP.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://aspire_app:4317
+    ports:
+      - "50051:50051"
+    networks:
+      - net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 15s
+        order: stop-first
+
+networks:
+  net:
+    external: true

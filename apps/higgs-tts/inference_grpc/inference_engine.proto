@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package inference.engine;
+
+service InferenceEngine {
+  rpc Generate(GenerateRequest) returns (stream GenerateResponse);
+}
+
+// =====================
+// Common Types
+// =====================
+
+message SamplingParams {
+  optional float temperature = 1;
+  float top_p = 2;
+  uint32 top_k = 3;
+  optional uint32 max_tokens = 4;
+  optional int32 seed = 5;
+
+  optional int32 ras_win_len = 6;
+  uint32 ras_win_max_num_repeat = 7;
+  bool force_audio_gen = 8;
+}
+
+message Speaker {
+  string uuid = 1;
+  string description = 2;
+  optional string audio_url = 3;
+}
+
+message InputMessage {
+  string text = 1;
+  Speaker speaker = 2;
+}
+
+// Supports single-speaker and multi-speaker generation.
+// Provide an array of messages, each tied to a speaker.
+// Optionally supply a system_prompt (overrides automatic construction)
+// or a scene_description (used when building the system prompt internally).
+message GenerationInput {
+  repeated InputMessage messages = 1;
+  optional string system_prompt = 2;
+  optional string scene_description = 3;
+}
+
+// =====================
+// Generate Request
+// =====================
+
+message GenerateRequest {
+  string request_id = 1;
+  repeated GenerationInput inputs = 2;
+  SamplingParams sampling_params = 3;
+  bool stream = 4;
+}
+
+// =====================
+// Generate Response
+// =====================
+
+message GenerateResponse {
+  oneof response {
+    GenerateStreamChunk chunk = 1;
+    GenerateComplete complete = 2;
+  }
+}
+
+message GenerateStreamChunk {
+  repeated uint32 token_ids = 1;
+  uint32 prompt_tokens = 2;
+  uint32 completion_tokens = 3;
+  bytes audio_data = 4;
+  uint32 sampling_rate = 5;
+  string audio_format = 6;
+}
+
+message GenerateComplete {
+  repeated uint32 output_ids = 1;
+  string finish_reason = 2;
+  uint32 prompt_tokens = 3;
+  uint32 completion_tokens = 4;
+  bytes audio_data = 5;
+  uint32 sampling_rate = 6;
+  string audio_format = 7;
+}
