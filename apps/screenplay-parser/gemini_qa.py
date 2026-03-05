@@ -1,8 +1,10 @@
 """
 Screenplay Q&A using Gemini with function calling.
 
-Gemini can call tools to list screenplays, get scenes, and run semantic search
-over RAG chunks. The agent loop runs until the model returns a final text answer.
+When ask is called with a screenplay_id (e.g. from the client viewer), tools are:
+get_scenes, get_full_story, and semantic_search—no list. When no screenplay_id
+is provided, tools are get_screenplay_scenes(screenplay_id) and semantic_search.
+The agent loop runs until the model returns a final text answer.
 """
 
 from __future__ import annotations
@@ -26,30 +28,36 @@ from config import (
     QA_OUTPUT_COST_PER_MILLION_TOKENS,
 )
 from models import LLMReason
-from store import get_screenplay_scenes, list_screenplays, record_llm_cost, search_chunks
+from store import get_screenplay_content, get_screenplay_scenes, record_llm_cost, search_chunks
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__, "0.1.0")
 
-# Tool declarations for Gemini (OpenAPI-style parameters)
-LIST_SCREENPLAYS_DECL = {
-    "name": "list_screenplays",
-    "description": "List all screenplays stored in the database. Returns id, title, authors, and source filename for each. Use this to find which screenplay(s) exist and their IDs before querying scenes or searching content.",
-    "parameters": {
-        "type": "object",
-        "properties": {},
-    },
+# Tool declarations for Gemini (OpenAPI-style parameters).
+# When screenplay_id is provided (ask from client), we use contextual tools that take no ID.
+# When screenplay_id is not provided, we use get_screenplay_scenes(screenplay_id) so the model can still query if given an ID.
+
+GET_SCENES_CONTEXT_DECL = {
+    "name": "get_scenes",
+    "description": "Get the list of scenes for the current screenplay. Returns scene_index, heading, page, location, and time_of_day for each scene. Use this when the user asks about scenes, structure, or outline.",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+GET_FULL_STORY_DECL = {
+    "name": "get_full_story",
+    "description": "Get the full screenplay text (all scenes, action, and dialogue) for the current screenplay. Use when the user asks for the full story, entire script, summary of the whole screenplay, or needs to read through the full content.",
+    "parameters": {"type": "object", "properties": {}},
 }
 
 GET_SCENES_DECL = {
     "name": "get_screenplay_scenes",
-    "description": "Get the list of scenes for a given screenplay. Returns scene_index, heading, page, location, and time_of_day for each scene. Use screenplay_id from list_screenplays.",
+    "description": "Get the list of scenes for a given screenplay by ID. Returns scene_index, heading, page, location, and time_of_day for each scene.",
     "parameters": {
         "type": "object",
         "properties": {
             "screenplay_id": {
                 "type": "string",
-                "description": "The screenplay ID (UUID from list_screenplays).",
+                "description": "The screenplay ID (UUID).",
             },
         },
         "required": ["screenplay_id"],
@@ -58,7 +66,7 @@ GET_SCENES_DECL = {
 
 SEMANTIC_SEARCH_DECL = {
     "name": "semantic_search",
-    "description": "Search screenplay content by meaning (semantic similarity). Use a natural language query (e.g. 'dialogue about the murder', 'scenes in the restaurant'). Returns matching chunk text, metadata (scene_heading, page, location, characters), and scene_index (0-based). Use scene_index in your [[ref:SCENE_INDEX \"quote\"]] citations. Optionally restrict to one screenplay by screenplay_id.",
+    "description": "Search screenplay content by meaning (semantic similarity). Use a natural language query (e.g. 'dialogue about the murder', 'scenes in the restaurant'). Returns matching chunk text, metadata (scene_heading, page, location, characters), and scene_index (0-based). Use scene_index in your [[ref:SCENE_INDEX \"quote\"]] citations. When a specific screenplay is in context, search is limited to it.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -68,7 +76,7 @@ SEMANTIC_SEARCH_DECL = {
             },
             "screenplay_id": {
                 "type": "string",
-                "description": "Optional. If provided, search only within this screenplay (UUID).",
+                "description": "Optional. If provided, search only within this screenplay (UUID). When asking about a specific screenplay, this is set automatically.",
             },
             "limit": {
                 "type": "integer",
@@ -79,7 +87,8 @@ SEMANTIC_SEARCH_DECL = {
     },
 }
 
-TOOL_DECLARATIONS = [LIST_SCREENPLAYS_DECL, GET_SCENES_DECL, SEMANTIC_SEARCH_DECL]
+TOOL_DECLARATIONS_CONTEXT = [GET_SCENES_CONTEXT_DECL, GET_FULL_STORY_DECL, SEMANTIC_SEARCH_DECL]
+TOOL_DECLARATIONS_NO_CONTEXT = [GET_SCENES_DECL, SEMANTIC_SEARCH_DECL]
 
 
 def _get_client() -> genai.Client | None:
@@ -161,6 +170,30 @@ def parse_citations(text: str) -> list[SceneReference]:
 EmbedFn = Callable[[list[str]], list[list[float]]]
 
 
+def _content_to_full_story_text(content: dict[str, Any]) -> str:
+    """Flatten stored screenplay content JSON into plain text (scene headings + element text)."""
+    lines: list[str] = []
+    title = content.get("title") or ""
+    authors = content.get("authors") or []
+    if title:
+        lines.append(title)
+    if authors:
+        lines.append("By " + ", ".join(authors))
+    if lines:
+        lines.append("")
+    for scene in content.get("scenes") or []:
+        heading = scene.get("heading") or ""
+        if heading:
+            lines.append(heading)
+            lines.append("")
+        for el in scene.get("elements") or []:
+            text = (el.get("text") or "").strip()
+            if text:
+                lines.append(text)
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
 async def _execute_tool(
     name: str,
     args: dict[str, Any],
@@ -170,9 +203,19 @@ async def _execute_tool(
     screenplay_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute a tool by name and return a JSON-serializable result."""
-    if name == "list_screenplays":
-        items = await list_screenplays(session)
-        return {"screenplays": items}
+    if name == "get_scenes":
+        if not screenplay_id:
+            return {"error": "No screenplay in context. Ask about a specific screenplay."}
+        scenes = await get_screenplay_scenes(session, screenplay_id)
+        return {"scenes": scenes}
+
+    if name == "get_full_story":
+        if not screenplay_id:
+            return {"error": "No screenplay in context. Ask about a specific screenplay."}
+        content = await get_screenplay_content(session, screenplay_id)
+        if not content:
+            return {"error": "Screenplay content not found.", "full_story_text": ""}
+        return {"full_story_text": _content_to_full_story_text(content)}
 
     if name == "get_screenplay_scenes":
         sid = args.get("screenplay_id")
@@ -243,9 +286,9 @@ async def answer_question(
     """
     Answer a question about the screenplay(s) using Gemini with function calling.
 
-    If screenplay_id is provided, it is added to the system context so the model
-    can prefer that screenplay. embed_fn is used for semantic_search; if None,
-    semantic search is disabled (list_screenplays and get_screenplay_scenes still work).
+    If screenplay_id is provided, tools are get_scenes, get_full_story, and semantic_search
+    (no list). Otherwise tools are get_screenplay_scenes(screenplay_id) and semantic_search.
+    embed_fn is used for semantic_search; if None, semantic search is disabled.
 
     Returns a QAResult with the answer text (containing citation markers), parsed references,
     and telemetry about the agent loop (rounds, tokens, tool call log).
@@ -261,18 +304,23 @@ async def answer_question(
             root_span.set_attribute("qa.error", "missing_api_key")
             return QAResult(answer="Error: Set GOOGLE_API_KEY or GEMINI_API_KEY to use the Q&A API.")
 
-        tools = types.Tool(function_declarations=TOOL_DECLARATIONS)
+        tool_declarations = (
+            TOOL_DECLARATIONS_CONTEXT if screenplay_id else TOOL_DECLARATIONS_NO_CONTEXT
+        )
+        tools = types.Tool(function_declarations=tool_declarations)
         system_instruction = (
             "You are a helpful assistant that answers questions about screenplays. "
-            "Use the provided tools to list screenplays, get their scenes, or search the content by meaning. "
-            "When answering a question (e.g. about a character's age, relationships, or events), use semantic_search with a relevant query to retrieve screenplay chunks. "
+            "Use the provided tools to get scenes, get the full story text, or search the content by meaning (semantic_search). "
+            "When the user asks for the list of scenes or structure, use get_scenes (or get_screenplay_scenes with screenplay_id if that tool is available). "
+            "When the user asks for the full story, entire script, or to read the whole screenplay, use get_full_story. "
+            "When answering a question about specific details (e.g. character, dialogue, events), use semantic_search with a relevant query to retrieve screenplay chunks. "
             "The search returns actual text from the screenplay—read that text and answer from it. Extract or infer details from the retrieved content when the question asks for them; if the content does not mention what is asked, say so. "
             "Answer based only on the tool results; if no relevant data is found, say so.\n\n"
             "CITATIONS: When your answer references specific text, events, or dialogue from the screenplay, "
             "you MUST include inline citations so the reader can jump to the source. Use this exact format:\n"
             '  [[ref:SCENE_INDEX "short exact quote"]]\n'
             "Rules:\n"
-            "- SCENE_INDEX is the 0-based scene_index from semantic_search results.\n"
+            "- SCENE_INDEX is the 0-based scene_index from semantic_search results or from scene lists.\n"
             "- The quote must be a short exact phrase (roughly 5-15 words) copied from the screenplay text.\n"
             "- Place each citation immediately after the claim or detail it supports.\n"
             "- Include citations for every specific factual claim drawn from the screenplay.\n"
@@ -280,7 +328,7 @@ async def answer_question(
             '- Example: John reveals he is a retired detective [[ref:5 "I hung up my badge ten years ago"]].\n'
         )
         if screenplay_id is not None:
-            system_instruction += f" The user may be asking about screenplay ID {screenplay_id} in particular."
+            system_instruction += f" The user is asking about a specific screenplay (ID {screenplay_id}); use get_scenes and get_full_story for that screenplay."
 
         config = types.GenerateContentConfig(
             tools=[tools],
@@ -477,12 +525,12 @@ def _summarize_tool_result(name: str, result: dict[str, Any]) -> str:
     """Produce a concise human-readable summary of a tool result for logs/traces."""
     if "error" in result:
         return f"error: {result['error']}"
-    if name == "list_screenplays":
-        items = result.get("screenplays", [])
-        return f"{len(items)} screenplay(s)"
-    if name == "get_screenplay_scenes":
+    if name in ("get_scenes", "get_screenplay_scenes"):
         scenes = result.get("scenes", [])
         return f"{len(scenes)} scene(s)"
+    if name == "get_full_story":
+        text = result.get("full_story_text", "")
+        return f"{len(text)} char(s)"
     if name == "semantic_search":
         results = result.get("results", [])
         return f"{len(results)} chunk(s) returned"

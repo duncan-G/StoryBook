@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Screenplay-aware PDF parser with FastAPI service"
 requires-python = ">=3.12"
 dependencies = [
+    "grpcio>=1.78.0",
+    "grpcio-tools",
     "uuid7-standard",
     "python-dotenv",
     "fastapi",
@@ -25,4 +27,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["main", "screenplay_parser", "gemini_qa", "chunking", "store", "database", "models", "telemetry"]
+py-modules = ["main", "screenplay_parser", "gemini_qa", "chunking", "store", "database", "models", "telemetry", "generate"]

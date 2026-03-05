@@ -199,24 +199,38 @@ async def search_chunks(
 # ---------------------------------------------------------------------------
 
 
+async def get_screenplay_content_with_reason(
+    session: AsyncSession, screenplay_id: uuid.UUID | str
+) -> tuple[dict | None, str | None]:
+    """
+    Return (content, reason). content is the screenplay JSON; reason is None when found,
+    or "not_found", "deleted", or "no_content" when content is unavailable.
+    """
+    try:
+        sid = screenplay_id if isinstance(screenplay_id, uuid.UUID) else uuid.UUID(screenplay_id)
+    except (ValueError, TypeError):
+        return None, "not_found"
+    q = select(ScreenplayModel.content, ScreenplayModel.is_deleted).where(ScreenplayModel.id == sid)
+    result = await session.execute(q)
+    row = result.one_or_none()
+    if row is None:
+        return None, "not_found"
+    content, is_deleted = row[0], row[1]
+    if is_deleted:
+        return None, "deleted"
+    if content is None:
+        return None, "no_content"
+    return content, None
+
+
 async def get_screenplay_content(
     session: AsyncSession, screenplay_id: uuid.UUID | str
 ) -> dict | None:
     """
     Return full screenplay JSON for viewer (content column). None if not found or no content.
     """
-    try:
-        sid = screenplay_id if isinstance(screenplay_id, uuid.UUID) else uuid.UUID(screenplay_id)
-    except (ValueError, TypeError):
-        return None
-    q = (
-        select(ScreenplayModel.content)
-        .where(ScreenplayModel.id == sid)
-        .where(ScreenplayModel.is_deleted == False)
-    )
-    result = await session.execute(q)
-    row = result.one_or_none()
-    return row[0] if row and row[0] is not None else None
+    content, _ = await get_screenplay_content_with_reason(session, screenplay_id)
+    return content
 
 
 async def soft_delete_screenplay(
@@ -237,6 +251,197 @@ async def soft_delete_screenplay(
         .values(is_deleted=True)
     )
     return result.rowcount > 0
+
+
+async def update_scene_metadata(
+    session: AsyncSession,
+    screenplay_id: uuid.UUID | str,
+    scene_index: int,
+    *,
+    location_type: str | None = None,
+    location: str | None = None,
+    time_of_day: str | None = None,
+) -> bool:
+    """
+    Update location_type, location, and/or time_of_day for one scene.
+    Also patches the heading and the stored content JSON to stay in sync.
+    Returns True if a row was updated, False if not found.
+    """
+    try:
+        sid = screenplay_id if isinstance(screenplay_id, uuid.UUID) else uuid.UUID(screenplay_id)
+    except (ValueError, TypeError):
+        return False
+
+    # Build column updates
+    values: dict = {}
+    if location_type is not None:
+        values["location_type"] = location_type
+    if location is not None:
+        values["location"] = location
+    if time_of_day is not None:
+        values["time_of_day"] = time_of_day
+    if not values:
+        return False
+
+    scene_q = (
+        select(SceneModel)
+        .where(SceneModel.screenplay_id == sid)
+        .where(SceneModel.scene_index == scene_index)
+    )
+    scene_result = await session.execute(scene_q)
+    scene_row = scene_result.scalar_one_or_none()
+    if scene_row is None:
+        return False
+
+    # Apply updates to the scene row
+    for k, v in values.items():
+        setattr(scene_row, k, v)
+
+    # Rebuild heading from the (potentially updated) fields
+    lt = scene_row.location_type or ""
+    loc = scene_row.location or ""
+    tod = scene_row.time_of_day or ""
+    parts = []
+    if lt:
+        parts.append(f"{lt.upper()}.")
+    if loc:
+        parts.append(loc.upper())
+    if tod:
+        if parts:
+            parts.append("-")
+        parts.append(tod.upper())
+    scene_row.heading = " ".join(parts) if parts else scene_row.heading
+
+    await session.flush()
+
+    # Patch the content JSONB
+    content_result = await session.execute(
+        select(ScreenplayModel.content).where(ScreenplayModel.id == sid)
+    )
+    row = content_result.one_or_none()
+    if row and row[0] is not None:
+        content = dict(row[0])
+        scenes_list = list(content.get("scenes", []))
+        if 0 <= scene_index < len(scenes_list):
+            scene_json = dict(scenes_list[scene_index])
+            if location_type is not None:
+                scene_json["location_type"] = location_type
+            if location is not None:
+                scene_json["location"] = location
+            if time_of_day is not None:
+                scene_json["time_of_day"] = time_of_day
+            scene_json["heading"] = scene_row.heading
+            scenes_list[scene_index] = scene_json
+            content["scenes"] = scenes_list
+            await session.execute(
+                update(ScreenplayModel)
+                .where(ScreenplayModel.id == sid)
+                .values(content=content)
+            )
+
+    return True
+
+
+async def update_element_text(
+    session: AsyncSession,
+    screenplay_id: uuid.UUID | str,
+    scene_index: int,
+    element_index: int,
+    text: str,
+) -> bool:
+    """
+    Update the text of a single element in a scene.
+    Patches the stored content JSON. Returns True if updated, False if not found.
+    """
+    try:
+        sid = screenplay_id if isinstance(screenplay_id, uuid.UUID) else uuid.UUID(screenplay_id)
+    except (ValueError, TypeError):
+        return False
+
+    content_result = await session.execute(
+        select(ScreenplayModel.content).where(ScreenplayModel.id == sid)
+    )
+    row = content_result.one_or_none()
+    if not row or row[0] is None:
+        return False
+
+    content = dict(row[0])
+    scenes_list = list(content.get("scenes", []))
+    if scene_index < 0 or scene_index >= len(scenes_list):
+        return False
+
+    scene_json = dict(scenes_list[scene_index])
+    elements_list = list(scene_json.get("elements", []))
+    if element_index < 0 or element_index >= len(elements_list):
+        return False
+
+    element = dict(elements_list[element_index])
+    element["text"] = text
+    elements_list[element_index] = element
+    scene_json["elements"] = elements_list
+    scenes_list[scene_index] = scene_json
+    content["scenes"] = scenes_list
+
+    await session.execute(
+        update(ScreenplayModel)
+        .where(ScreenplayModel.id == sid)
+        .values(content=content)
+    )
+    return True
+
+
+async def update_screenplay_metadata(
+    session: AsyncSession,
+    screenplay_id: uuid.UUID | str,
+    *,
+    title: str | None = None,
+    authors: list[str] | None = None,
+) -> bool:
+    """
+    Update title and/or authors for a screenplay.
+    Also patches the stored content JSON so the viewer stays in sync.
+    Returns True if a row was updated, False if not found.
+    """
+    try:
+        sid = screenplay_id if isinstance(screenplay_id, uuid.UUID) else uuid.UUID(screenplay_id)
+    except (ValueError, TypeError):
+        return False
+
+    values: dict = {}
+    if title is not None:
+        values["title"] = title
+    if authors is not None:
+        values["authors"] = authors
+    if not values:
+        return False
+
+    result = await session.execute(
+        update(ScreenplayModel)
+        .where(ScreenplayModel.id == sid)
+        .where(ScreenplayModel.is_deleted == False)
+        .values(**values)
+    )
+    if result.rowcount == 0:
+        return False
+
+    # Patch the content JSONB so GET /screenplays/{id} returns updated metadata
+    content_result = await session.execute(
+        select(ScreenplayModel.content).where(ScreenplayModel.id == sid)
+    )
+    row = content_result.one_or_none()
+    if row and row[0] is not None:
+        content = dict(row[0])
+        if title is not None:
+            content["title"] = title
+        if authors is not None:
+            content["authors"] = authors
+        await session.execute(
+            update(ScreenplayModel)
+            .where(ScreenplayModel.id == sid)
+            .values(content=content)
+        )
+
+    return True
 
 
 async def list_screenplays(session: AsyncSession) -> list[dict]:

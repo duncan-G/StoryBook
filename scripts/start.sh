@@ -7,21 +7,30 @@ usage() {
     echo "  -f: Force re-initialization of Docker Swarm"
     echo "  -s: Start screenplay-viewer application"
     echo "  -d: Start only the database stack"
+    echo "  -t: Start higgs-tts application"
     echo "  -h: Show this help message"
+    echo "  -S: Start screenplay-viewer application in containerized mode"
     exit 0
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FRONTEND_DIR="$REPO_ROOT/apps/screenplay-viewer"
+PID_DIR="$SCRIPT_DIR/.pids"
 
 force=false
 screenplay_viewer=false
+sp_viewer_containerized=false
 db_only=false
+higgs_tts=false
 
-while getopts "fsdh" opt; do
+while getopts "fsStdh" opt; do
     case "$opt" in
         f) force=true ;;
         s) screenplay_viewer=true ;;
+        S) screenplay_viewer=true; sp_viewer_containerized=true ;;
         d) db_only=true ;;
+        t) higgs_tts=true ;;
         h) usage ;;
         *) usage ;;
     esac
@@ -90,7 +99,31 @@ start_telemetry() {
     deploy_stack_if_needed aspire infra/telemetry/aspire.stack.dev.yaml ASPIRE_BROWSER_TOKEN=aspire
 }
 
+
 start_screenplay_viewer() {
+    if [ "$sp_viewer_containerized" == true ]; then
+        echo "Starting screenplay-viewer in containerized mode"
+        docker stack deploy -c apps/screenplay-parser/stack.dev.yaml screenplay-parser
+
+        mkdir -p "$PID_DIR"
+        if command -v gnome-terminal >/dev/null 2>&1; then
+            gnome-terminal --title="Frontend (screenplay-viewer)" -- bash -lc \
+            "cd '$FRONTEND_DIR' && npm run dev & echo \$! > '$PID_DIR/frontend.pid'; wait || { echo 'Frontend failed. Press Enter to close.'; read -r; }" &
+            local term_pid=$!
+            echo "$term_pid" > "$PID_DIR/frontend-terminal.pid"
+            echo "Frontend start command issued. Terminal PID: $term_pid"
+        else
+            echo "gnome-terminal not found. Falling back to background mode (nohup)."
+            (
+            cd "$FRONTEND_DIR"
+            nohup npm run dev >/dev/null 2>&1 &
+            echo $! > "$PID_DIR/frontend.pid"
+            )
+        fi
+
+        return 0
+    fi
+
     local viewer_script="$SCRIPT_DIR/start_screenplay_viewer.sh"
 
     if [ ! -f "$viewer_script" ]; then
@@ -102,6 +135,11 @@ start_screenplay_viewer() {
     bash "$viewer_script"
 }
 
+start_higgs_tts() {
+    echo "Starting higgs-tts"
+    deploy_stack_if_needed higgs-tts apps/higgs-tts/stack.dev.yaml
+}
+
 start_swarm
 create_network
 start_db
@@ -111,5 +149,9 @@ if [ "$db_only" != true ]; then
 
     if [ "$screenplay_viewer" == true ]; then
         start_screenplay_viewer
+    fi
+
+    if [ "$higgs_tts" == true ]; then
+        start_higgs_tts
     fi
 fi

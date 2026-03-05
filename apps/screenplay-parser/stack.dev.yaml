@@ -1,0 +1,37 @@
+# Screenplay PDF parser API. Expects overlay network "net" and db stack (postgres) as db_app.
+# Build: docker build -t umt/screenplay-parser:latest .
+# Deploy: docker stack deploy -c stack.dev.yaml screenplay
+# Env (optional): DATABASE_URL, GOOGLE_API_KEY or GEMINI_API_KEY, OTEL_EXPORTER_OTLP_ENDPOINT, CORS_ORIGINS
+version: "3.8"
+
+services:
+  app:
+    image: umt/screenplay-parser:latest
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dev:dev@db_app:5432/dev
+      HIGGS_TTS_GRPC_ADDRESS: higgs-tts_app:50051
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://aspire_app:4318
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      # Optional: GOOGLE_API_KEY or GEMINI_API_KEY for /ingest embeddings and /ask
+    ports:
+      - "8000:8000"
+    networks:
+      - net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 15s
+        order: stop-first
+
+networks:
+  net:
+    external: true

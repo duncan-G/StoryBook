@@ -23,6 +23,7 @@ from typing import AsyncIterator
 
 from opentelemetry import trace
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +37,8 @@ from screenplay_parser import (
     parse_screenplay,
 )
 from gemini_qa import answer_question
-from store import get_llm_costs, get_screenplay_content, list_screenplays, soft_delete_screenplay, store_screenplay
+from store import get_llm_costs, get_screenplay_content, get_screenplay_content_with_reason, list_screenplays, soft_delete_screenplay, store_screenplay, update_element_text, update_scene_metadata, update_screenplay_metadata
+from generate import GenerationOptions, first_scene_to_text, generate_audio_for_text
 from telemetry import instrument_app
 
 logger = logging.getLogger(__name__)
@@ -384,8 +386,8 @@ async def ingest_pdf(
 
 
 class AskRequest(BaseModel):
-    question: str = Field(..., description="Natural language question about the screenplay(s).")
-    screenplay_id: str | None = Field(None, description="Optional. Restrict context to this screenplay ID (UUID).")
+    question: str = Field(..., description="Natural language question about the screenplay.")
+    screenplay_id: str = Field(..., description="Screenplay ID (UUID). Ask is scoped to this screenplay; tools get_scenes and get_full_story use it.")
 
 
 class SceneReferenceResponse(BaseModel):
@@ -408,6 +410,93 @@ async def list_screenplays_api(session: AsyncSession = Depends(get_session)):
     """List all uploaded (stored) screenplays. Excludes soft-deleted (is_deleted=true)."""
     rows = await list_screenplays(session)
     return [ScreenplayListItem(**r) for r in rows]
+
+
+# Declare /generate before generic /{id} so /screenplays/{id}/generate matches correctly
+@app.get("/screenplays/{screenplay_id}/generate")
+async def generate_first_scene_api(
+    screenplay_id: str,
+    session: AsyncSession = Depends(get_session),
+    speaker_description: str | None = None,
+    scene_description: str | None = None,
+    temperature: float | None = None,
+    seed: int | None = None,
+    max_tokens: int | None = None,
+    force_audio_gen: bool | None = None,
+):
+    """
+    Generate audio for the first scene of the screenplay via higgs-tts gRPC.
+    Returns FLAC audio for inline playback. Use in <audio src="..."> or fetch.
+    Requires higgs-tts service; set HIGGS_TTS_GRPC_ADDRESS (e.g. higgs-tts_app:50051)
+    when running in Docker Swarm.
+
+    Optional query params (Higgs TTS): speaker_description, scene_description,
+    temperature, seed, max_tokens, force_audio_gen.
+    """
+    try:
+        uuid.UUID(screenplay_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid screenplay ID.")
+
+    content, reason = await get_screenplay_content_with_reason(session, screenplay_id)
+    if content is None:
+        logger.warning(
+            "Generate 404: screenplay_id=%r reason=%s",
+            screenplay_id,
+            reason,
+        )
+        if reason == "not_found":
+            raise HTTPException(status_code=404, detail="Screenplay not found. Check the ID.")
+        if reason == "deleted":
+            raise HTTPException(status_code=404, detail="Screenplay has been deleted.")
+        if reason == "no_content":
+            raise HTTPException(
+                status_code=404,
+                detail="Screenplay has no stored content. Re-upload and ingest the PDF to enable generation.",
+            )
+        raise HTTPException(status_code=404, detail="Screenplay not found or content not available.")
+
+    text = first_scene_to_text(content)
+    if not text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Screenplay has no first scene or scene is empty.",
+        )
+
+    options = GenerationOptions(
+        speaker_description=speaker_description,
+        scene_description=scene_description,
+        temperature=temperature,
+        seed=seed,
+        max_tokens=max_tokens,
+        force_audio_gen=force_audio_gen,
+    )
+
+    with tracer.start_as_current_span("generate_first_scene") as span:
+        span.set_attribute("screenplay_id", screenplay_id)
+        span.set_attribute("scene_text_length", len(text))
+
+        try:
+            audio_data, sampling_rate, audio_format = await generate_audio_for_text(text, options=options)
+        except RuntimeError as e:
+            logger.exception("TTS generation failed")
+            raise HTTPException(status_code=503, detail=str(e)) from e
+
+        if not audio_data:
+            raise HTTPException(
+                status_code=503,
+                detail="Higgs TTS returned no audio. Is the service running?",
+            )
+
+    media_type = "audio/flac" if audio_format.lower() == "flac" else "audio/octet-stream"
+    return Response(
+        content=audio_data,
+        media_type=media_type,
+        headers={
+            "X-Sampling-Rate": str(sampling_rate),
+            "Content-Disposition": f'inline; filename="scene-1.{audio_format.lower()}"',
+        },
+    )
 
 
 @app.get("/screenplays/{screenplay_id}", response_model=ScreenplayResponse)
@@ -448,6 +537,96 @@ async def delete_screenplay_api(
     return {"ok": True, "message": "Screenplay deleted."}
 
 
+class UpdateScreenplayRequest(BaseModel):
+    title: str | None = Field(None, description="New title (omit to leave unchanged).")
+    authors: list[str] | None = Field(None, description="New authors list (omit to leave unchanged).")
+
+
+@app.patch("/screenplays/{screenplay_id}")
+async def update_screenplay_api(
+    screenplay_id: str,
+    body: UpdateScreenplayRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Update title and/or authors for a screenplay."""
+    try:
+        uuid.UUID(screenplay_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid screenplay ID: must be a valid UUID.",
+        )
+    updated = await update_screenplay_metadata(
+        session,
+        screenplay_id,
+        title=body.title,
+        authors=body.authors,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Screenplay not found or nothing to update.")
+    return {"ok": True, "message": "Screenplay updated."}
+
+
+class UpdateSceneRequest(BaseModel):
+    location_type: str | None = Field(None, description="INT, EXT, I/E, etc.")
+    location: str | None = Field(None, description="Location name.")
+    time_of_day: str | None = Field(None, description="Time of day (DAY, NIGHT, etc.).")
+
+
+@app.patch("/screenplays/{screenplay_id}/scenes/{scene_index}")
+async def update_scene_api(
+    screenplay_id: str,
+    scene_index: int,
+    body: UpdateSceneRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Update location_type, location, and/or time_of_day for a single scene."""
+    try:
+        uuid.UUID(screenplay_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid screenplay ID.")
+    updated = await update_scene_metadata(
+        session,
+        screenplay_id,
+        scene_index,
+        location_type=body.location_type,
+        location=body.location,
+        time_of_day=body.time_of_day,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Scene not found or nothing to update.")
+    return {"ok": True, "message": "Scene updated."}
+
+
+class UpdateElementRequest(BaseModel):
+    text: str = Field(..., description="New element text.")
+
+
+@app.patch("/screenplays/{screenplay_id}/scenes/{scene_index}/elements/{element_index}")
+async def update_element_api(
+    screenplay_id: str,
+    scene_index: int,
+    element_index: int,
+    body: UpdateElementRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Update the text of a single element in a scene."""
+    try:
+        uuid.UUID(screenplay_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid screenplay ID.")
+    updated = await update_element_text(
+        session,
+        screenplay_id,
+        scene_index,
+        element_index,
+        body.text,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Element not found.")
+    return {"ok": True, "message": "Element updated."}
+
+
 @app.get("/costs")
 async def get_costs_api(session: AsyncSession = Depends(get_session)):
     """Return aggregated LLM cost data: totals, by reason, by screenplay, and recent entries."""
@@ -460,10 +639,11 @@ async def ask_about_screenplay(
     session: AsyncSession = Depends(get_session),
 ):
     """
-    Answer a question about stored screenplays using Gemini with function calling.
-    Gemini can list screenplays, get scenes, and run semantic search over content.
-    Set GOOGLE_API_KEY or GEMINI_API_KEY. For semantic search, screenplays must
-    have been ingested with embeddings (same env var).
+    Answer a question about the given screenplay using Gemini with function calling.
+    Requires screenplay_id (client is always on a specific screenplay). Tools:
+    get_scenes, get_full_story, and semantic_search. Set GOOGLE_API_KEY or
+    GEMINI_API_KEY. For semantic search, the screenplay must have been ingested
+    with embeddings.
 
     The answer may contain inline citation markers like [[ref:3 "exact quote"]].
     Parsed references are also returned in the `references` field.
