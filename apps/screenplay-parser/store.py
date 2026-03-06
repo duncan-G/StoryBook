@@ -19,6 +19,7 @@ from config import EMBEDDING_COST_PER_MILLION_TOKENS
 from models import (
     LLMReason,
     RAGChunkModel,
+    SceneAudioModel,
     SceneModel,
     ScreenplayLLMCostModel,
     ScreenplayModel,
@@ -388,6 +389,74 @@ async def update_element_text(
         .values(content=content)
     )
     return True
+
+
+async def get_scene_id_by_index(
+    session: AsyncSession,
+    screenplay_id: uuid.UUID | str,
+    scene_index: int,
+) -> int | None:
+    """Return scene DB id for a screenplay + scene_index. None if not found."""
+    try:
+        sid = screenplay_id if isinstance(screenplay_id, uuid.UUID) else uuid.UUID(screenplay_id)
+    except (ValueError, TypeError):
+        return None
+
+    result = await session.execute(
+        select(SceneModel.id)
+        .where(SceneModel.screenplay_id == sid)
+        .where(SceneModel.scene_index == scene_index)
+    )
+    row = result.one_or_none()
+    return row[0] if row else None
+
+
+async def get_scene_audio(
+    session: AsyncSession,
+    screenplay_id: uuid.UUID | str,
+    scene_index: int,
+) -> tuple[bytes, str, int] | None:
+    """
+    Return stored audio for a scene by screenplay_id + scene_index.
+    Returns (audio_data, audio_format, sampling_rate) or None if not found.
+    """
+    scene_id = await get_scene_id_by_index(session, screenplay_id, scene_index)
+    if scene_id is None:
+        return None
+
+    result = await session.execute(
+        select(
+            SceneAudioModel.audio_data,
+            SceneAudioModel.audio_format,
+            SceneAudioModel.sampling_rate,
+        ).where(SceneAudioModel.scene_id == scene_id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        return None
+    return (row[0], row[1] or "flac", row[2] or 24000)
+
+
+async def store_scene_audio(
+    session: AsyncSession,
+    scene_id: int,
+    audio_data: bytes,
+    *,
+    audio_format: str = "flac",
+    sampling_rate: int = 24000,
+) -> None:
+    """Insert or replace TTS audio for a scene. One row per scene (overwrites on regen)."""
+    from sqlalchemy import delete
+
+    await session.execute(delete(SceneAudioModel).where(SceneAudioModel.scene_id == scene_id))
+    session.add(
+        SceneAudioModel(
+            scene_id=scene_id,
+            audio_data=audio_data,
+            audio_format=audio_format,
+            sampling_rate=sampling_rate,
+        )
+    )
 
 
 async def update_screenplay_metadata(

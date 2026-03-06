@@ -1,5 +1,6 @@
 "use client";
 
+import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SceneElement } from "@/types/screenplay";
 import GhostInput from "./GhostInput";
@@ -10,6 +11,12 @@ interface Props {
   onTextChange?: (newText: string) => void;
   /** Called when the user starts editing this element; use to clear the active reference highlight. */
   onClearActiveReference?: () => void;
+  /** Called when the generate-audio button is clicked. Triggers scene-level audio generation. */
+  onGenerateAudio?: () => void;
+  /** When true, the generate-audio button is disabled (e.g. generation in progress). */
+  audioLoading?: boolean;
+  /** When true, show the generate-audio button when the input is focused. */
+  showGenerateAudio?: boolean;
 }
 
 const base = "font-mono text-sm";
@@ -56,27 +63,61 @@ function EditableOrStatic({
   return <>{text}</>;
 }
 
+const audioButton = (
+  onGenerateAudio: () => void,
+  audioLoading: boolean,
+) => (
+  <button
+    type="button"
+    onClick={(e) => {
+      e.stopPropagation();
+      onGenerateAudio();
+    }}
+    disabled={audioLoading}
+    aria-label={audioLoading ? "Generating audio…" : "Generate audio for this scene"}
+    className={cn(
+      "absolute -top-0.5 right-0 z-20 flex h-6 w-6 items-center justify-center rounded",
+      "border border-border bg-background shadow-sm text-muted-foreground",
+      "opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-focus-within/input:opacity-100",
+      "hover:bg-accent hover:text-accent-foreground",
+      "focus:outline-none focus:ring-1 focus:ring-ring",
+      "disabled:pointer-events-none disabled:opacity-40",
+    )}
+  >
+    <Volume2 className="h-3 w-3" aria-hidden />
+  </button>
+);
+
 export default function ElementRenderer({
   element,
   activeReferenceText,
   onTextChange,
   onClearActiveReference,
+  onGenerateAudio,
+  audioLoading = false,
+  showGenerateAudio = false,
 }: Props) {
   const active = isActiveElement(element.text, activeReferenceText);
   const activeAttr = active ? "" : undefined;
 
   // Highlight layer: absolutely positioned so it doesn't affect layout (no text shift).
-  // Extends 12px around content for visual breathing room.
   const highlightLayer = active ? (
     <span
       aria-hidden
       className="pointer-events-none absolute -inset-3 rounded-sm border border-primary/50 bg-primary/5 shadow-[0_0_12px_rgba(217,119,6,0.15)] dark:shadow-[0_0_12px_rgba(245,158,11,0.2)]"
     />
   ) : null;
-  // Always wrap in a stable container so clearing the highlight doesn't change the tree
-  // and remount GhostInput (which would cancel entering edit mode on first click).
+  // Wrap content in group/input so focus-within reveals the audio button when the input is focused.
   const contentWrap = (children: React.ReactNode) => (
-    <div className={active ? "relative z-10" : undefined}>{children}</div>
+    <div
+      className={cn(
+        "relative group/input pr-8",
+        active && "z-10",
+      )}
+    >
+      {children}
+      {showGenerateAudio && onGenerateAudio && onTextChange && audioButton(onGenerateAudio, audioLoading)}
+    </div>
   );
 
   switch (element.type) {

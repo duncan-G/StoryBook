@@ -43,6 +43,54 @@ class GenerationOptions:
     force_audio_gen: bool | None = None
 
 
+def _scene_dict_to_text(scene: dict) -> str:
+    """Convert a single scene dict (from content JSON) to plain text for TTS.
+
+    Renders heading, location/time, action lines, and dialogue blocks.
+    """
+    parts: list[str] = []
+
+    heading = (scene.get("heading") or "").strip()
+    if heading:
+        parts.append(heading)
+
+    location = (scene.get("location") or "").strip()
+    time_of_day = (scene.get("time_of_day") or "").strip()
+    loc_tod = [s for s in (location, time_of_day) if s]
+    if loc_tod:
+        parts.append(" ".join(loc_tod))
+
+    action_lines = scene.get("action_lines") or []
+    for line in action_lines:
+        t = (line or "").strip()
+        if t:
+            parts.append(t)
+
+    dialogue_blocks = scene.get("dialogue_blocks") or []
+    for block in dialogue_blocks:
+        char = block.get("character") or "UNKNOWN"
+        is_voice_over = block.get("is_voice_over") or False
+        speech = (block.get("speech") or "").strip()
+        prefix = f"{char} (V.O.): " if is_voice_over else f"{char}: "
+        parts.append(prefix + speech)
+        parentheticals = block.get("parentheticals") or []
+        if parentheticals:
+            parts.append(" (" + "; ".join(parentheticals) + ")")
+
+    return "\n\n".join(p for p in parts if p)
+
+
+def scene_to_text(content: dict, scene_index: int) -> str:
+    """Convert a scene at the given index from content JSON to plain text.
+
+    Renders heading, location/time, action lines, and dialogue blocks for TTS.
+    """
+    scenes = content.get("scenes") or []
+    if scene_index < 0 or scene_index >= len(scenes):
+        return ""
+    return _scene_dict_to_text(scenes[scene_index])
+
+
 def first_scene_to_text(content: dict) -> str:
     """Convert the first scene from stored screenplay content JSON to plain text.
 

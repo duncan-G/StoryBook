@@ -20,6 +20,8 @@ interface Props {
   /** Called whenever the visible scene changes. */
   onSceneChange?: (index: number) => void;
   screenplayId?: string;
+  /** Called when user clicks generate-audio on a focused scene. */
+  onGenerateAudio?: (sceneIndex: number) => void | Promise<void>;
 }
 
 export default function VerticalNav({
@@ -31,6 +33,7 @@ export default function VerticalNav({
   initialSceneIndex = 0,
   onSceneChange,
   screenplayId,
+  onGenerateAudio,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -144,6 +147,8 @@ export default function VerticalNav({
               activeReferenceText={activeReferenceText}
               onClearActiveReference={onClearActiveReference}
               screenplayId={screenplayId}
+              isFocused={activeIdx === i}
+              onGenerateAudio={onGenerateAudio}
             />
           </div>
         ))}

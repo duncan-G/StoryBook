@@ -120,6 +120,71 @@ export interface GenerateAudioOptions {
 }
 
 /**
+ * Fetch stored audio for a scene (by screenplay_id + scene_index).
+ * Returns the audio blob. Throws with 404 if no audio has been generated yet.
+ */
+export async function getSceneAudio(
+  screenplayId: string,
+  sceneIndex: number,
+): Promise<Blob> {
+  const res = await fetch(
+    `${API_BASE}/screenplays/${screenplayId}/scenes/${sceneIndex}/audio`,
+  );
+  if (!res.ok) {
+    if (res.status === 404) throw new Error("NOT_FOUND");
+    let message = "Failed to fetch audio";
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") message = body.detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(message);
+  }
+  return res.blob();
+}
+
+/**
+ * Request generation of audio for a single scene via higgs-tts.
+ * Saves to DB and returns the audio blob for playback.
+ */
+export async function generateSceneAudio(
+  screenplayId: string,
+  sceneIndex: number,
+  options?: GenerateAudioOptions,
+): Promise<Blob> {
+  const url = new URL(
+    `${API_BASE}/screenplays/${screenplayId}/scenes/${sceneIndex}/generate`,
+  );
+  if (options) {
+    if (options.speaker_description != null)
+      url.searchParams.set("speaker_description", options.speaker_description);
+    if (options.scene_description != null)
+      url.searchParams.set("scene_description", options.scene_description);
+    if (options.temperature != null)
+      url.searchParams.set("temperature", String(options.temperature));
+    if (options.seed != null) url.searchParams.set("seed", String(options.seed));
+    if (options.max_tokens != null)
+      url.searchParams.set("max_tokens", String(options.max_tokens));
+    if (options.force_audio_gen != null)
+      url.searchParams.set("force_audio_gen", String(options.force_audio_gen));
+  }
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    let message = "Failed to generate audio";
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") message = body.detail;
+    } catch {
+      if (res.status === 404) message = "Screenplay or scene not found";
+      if (res.status === 503) message = "TTS service unavailable. Is higgs-tts running?";
+    }
+    throw new Error(message);
+  }
+  return res.blob();
+}
+
+/**
  * Request generation of audio for the first scene via higgs-tts.
  * Returns the audio blob for playback.
  */

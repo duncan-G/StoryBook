@@ -37,8 +37,8 @@ from screenplay_parser import (
     parse_screenplay,
 )
 from gemini_qa import answer_question
-from store import get_llm_costs, get_screenplay_content, get_screenplay_content_with_reason, list_screenplays, soft_delete_screenplay, store_screenplay, update_element_text, update_scene_metadata, update_screenplay_metadata
-from generate import GenerationOptions, first_scene_to_text, generate_audio_for_text
+from store import get_llm_costs, get_scene_audio, get_screenplay_content, get_screenplay_content_with_reason, get_scene_id_by_index, list_screenplays, soft_delete_screenplay, store_screenplay, store_scene_audio, update_element_text, update_scene_metadata, update_screenplay_metadata
+from generate import GenerationOptions, first_scene_to_text, generate_audio_for_text, scene_to_text
 from telemetry import instrument_app
 
 logger = logging.getLogger(__name__)
@@ -412,7 +412,148 @@ async def list_screenplays_api(session: AsyncSession = Depends(get_session)):
     return [ScreenplayListItem(**r) for r in rows]
 
 
-# Declare /generate before generic /{id} so /screenplays/{id}/generate matches correctly
+# Declare most specific routes first: /scenes/{idx}/audio, /scenes/{idx}/generate before /generate before /{id}
+@app.get("/screenplays/{screenplay_id}/scenes/{scene_index}/audio")
+async def get_scene_audio_api(
+    screenplay_id: str,
+    scene_index: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Return stored audio for a scene (by screenplay_id + scene_index).
+    404 if no audio has been generated for this scene yet.
+    """
+    try:
+        uuid.UUID(screenplay_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid screenplay ID.")
+
+    if scene_index < 0:
+        raise HTTPException(status_code=422, detail="Invalid scene index.")
+
+    result = await get_scene_audio(session, screenplay_id, scene_index)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No audio stored for this scene. Click generate to create it.",
+        )
+
+    audio_data, audio_format, sampling_rate = result
+    media_type = "audio/flac" if audio_format.lower() == "flac" else "audio/octet-stream"
+    return Response(
+        content=audio_data,
+        media_type=media_type,
+        headers={
+            "X-Sampling-Rate": str(sampling_rate),
+            "Content-Disposition": f'inline; filename="scene-{scene_index + 1}.{audio_format.lower()}"',
+        },
+    )
+
+
+@app.get("/screenplays/{screenplay_id}/scenes/{scene_index}/generate")
+async def generate_scene_audio_api(
+    screenplay_id: str,
+    scene_index: int,
+    session: AsyncSession = Depends(get_session),
+    speaker_description: str | None = None,
+    scene_description: str | None = None,
+    temperature: float | None = None,
+    seed: int | None = None,
+    max_tokens: int | None = None,
+    force_audio_gen: bool | None = None,
+):
+    """
+    Generate audio for a single scene via higgs-tts gRPC.
+    Saves the audio to the DB (scene_audios) and returns FLAC for inline playback.
+    """
+    try:
+        uuid.UUID(screenplay_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid screenplay ID.")
+
+    if scene_index < 0:
+        raise HTTPException(status_code=422, detail="Invalid scene index.")
+
+    content, reason = await get_screenplay_content_with_reason(session, screenplay_id)
+    if content is None:
+        logger.warning(
+            "Generate scene 404: screenplay_id=%r scene_index=%s reason=%s",
+            screenplay_id,
+            scene_index,
+            reason,
+        )
+        if reason == "not_found":
+            raise HTTPException(status_code=404, detail="Screenplay not found. Check the ID.")
+        if reason == "deleted":
+            raise HTTPException(status_code=404, detail="Screenplay has been deleted.")
+        if reason == "no_content":
+            raise HTTPException(
+                status_code=404,
+                detail="Screenplay has no stored content. Re-upload and ingest the PDF to enable generation.",
+            )
+        raise HTTPException(status_code=404, detail="Screenplay not found or content not available.")
+
+    scenes = content.get("scenes") or []
+    if scene_index >= len(scenes):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Scene {scene_index + 1} not found. Screenplay has {len(scenes)} scenes.",
+        )
+
+    text = scene_to_text(content, scene_index)
+    if not text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail=f"Scene {scene_index + 1} has no content to generate audio from.",
+        )
+
+    options = GenerationOptions(
+        speaker_description=speaker_description,
+        scene_description=scene_description,
+        temperature=temperature,
+        seed=seed,
+        max_tokens=max_tokens,
+        force_audio_gen=force_audio_gen,
+    )
+
+    with tracer.start_as_current_span("generate_scene_audio") as span:
+        span.set_attribute("screenplay_id", screenplay_id)
+        span.set_attribute("scene_index", scene_index)
+        span.set_attribute("scene_text_length", len(text))
+
+        try:
+            audio_data, sampling_rate, audio_format = await generate_audio_for_text(text, options=options)
+        except RuntimeError as e:
+            logger.exception("TTS generation failed")
+            raise HTTPException(status_code=503, detail=str(e)) from e
+
+        if not audio_data:
+            raise HTTPException(
+                status_code=503,
+                detail="Higgs TTS returned no audio. Is the service running?",
+            )
+
+        scene_id = await get_scene_id_by_index(session, screenplay_id, scene_index)
+        if scene_id is not None:
+            await store_scene_audio(
+                session,
+                scene_id,
+                audio_data,
+                audio_format=audio_format,
+                sampling_rate=sampling_rate,
+            )
+
+    media_type = "audio/flac" if audio_format.lower() == "flac" else "audio/octet-stream"
+    return Response(
+        content=audio_data,
+        media_type=media_type,
+        headers={
+            "X-Sampling-Rate": str(sampling_rate),
+            "Content-Disposition": f'inline; filename="scene-{scene_index + 1}.{audio_format.lower()}"',
+        },
+    )
+
+
 @app.get("/screenplays/{screenplay_id}/generate")
 async def generate_first_scene_api(
     screenplay_id: str,

@@ -25,6 +25,8 @@ interface Props {
   /** Called whenever the visible scene changes. */
   onSceneChange?: (index: number) => void;
   screenplayId?: string;
+  /** Called when user clicks generate-audio on the focused scene. */
+  onGenerateAudio?: (sceneIndex: number) => void | Promise<void>;
 }
 
 const btnClass = cn(
@@ -43,6 +45,7 @@ export default function HorizontalNav({
   initialSceneIndex = 0,
   onSceneChange,
   screenplayId,
+  onGenerateAudio,
 }: Props) {
   const [current, setCurrent] = useState(initialSceneIndex);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -127,6 +130,8 @@ export default function HorizontalNav({
           activeReferenceText={activeReferenceText}
           onClearActiveReference={onClearActiveReference}
           screenplayId={screenplayId}
+          isFocused={true}
+          onGenerateAudio={onGenerateAudio}
         />
       </div>
 

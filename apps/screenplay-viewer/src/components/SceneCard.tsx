@@ -18,6 +18,10 @@ interface Props {
   activeReferenceText?: string | null;
   onClearActiveReference?: () => void;
   screenplayId?: string;
+  /** When true, shows the generate-audio button on the border. */
+  isFocused?: boolean;
+  /** Called when the user clicks the generate-audio button. Receives scene index. */
+  onGenerateAudio?: (sceneIndex: number) => void | Promise<void>;
 }
 
 export default function SceneCard({
@@ -27,7 +31,10 @@ export default function SceneCard({
   activeReferenceText,
   onClearActiveReference,
   screenplayId,
+  isFocused = false,
+  onGenerateAudio,
 }: Props) {
+  const [audioLoading, setAudioLoading] = useState(false);
   const [locType, setLocType] = useState(scene.location_type ?? "");
   const [location, setLocation] = useState(scene.location || "");
   const [timeOfDay, setTimeOfDay] = useState(scene.time_of_day || "");
@@ -94,8 +101,15 @@ export default function SceneCard({
     [screenplayId, index, scene.elements],
   );
 
+  const handleGenerateAudio = useCallback(() => {
+    if (!onGenerateAudio || audioLoading) return;
+    setAudioLoading(true);
+    Promise.resolve(onGenerateAudio(index))
+      .finally(() => setAudioLoading(false));
+  }, [onGenerateAudio, index, audioLoading]);
+
   return (
-    <article className="w-full">
+    <article className="relative w-full">
       <header
         className={cn(
           "sticky top-0 z-10 flex flex-wrap items-center gap-2 px-3 py-2 sm:gap-3 sm:px-6 sm:py-3",
@@ -186,6 +200,9 @@ export default function SceneCard({
                   activeReferenceText={activeReferenceText}
                   onTextChange={screenplayId ? handleElementTextChange(i) : undefined}
                   onClearActiveReference={onClearActiveReference}
+                  onGenerateAudio={handleGenerateAudio}
+                  audioLoading={audioLoading}
+                  showGenerateAudio={!!(screenplayId && onGenerateAudio)}
                 />
               </div>
             );
@@ -197,6 +214,9 @@ export default function SceneCard({
               activeReferenceText={activeReferenceText}
               onTextChange={screenplayId ? handleElementTextChange(i) : undefined}
               onClearActiveReference={onClearActiveReference}
+              onGenerateAudio={handleGenerateAudio}
+              audioLoading={audioLoading}
+              showGenerateAudio={!!(screenplayId && onGenerateAudio)}
             />
           );
         })}

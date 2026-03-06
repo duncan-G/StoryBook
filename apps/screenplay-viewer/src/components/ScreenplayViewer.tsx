@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronRight, ChevronDown, Home, MessageCircle, Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { updateScreenplayMetadata, generateFirstSceneAudio } from "@/lib/api";
+import { generateFirstSceneAudio, generateSceneAudio, getSceneAudio, updateScreenplayMetadata } from "@/lib/api";
 import { Screenplay } from "@/types/screenplay";
 import HorizontalNav from "./HorizontalNav";
 import MarginAssistant from "./MarginAssistant";
@@ -172,6 +172,30 @@ export default function ScreenplayViewer({
     }
   }, [screenplayId]);
 
+  const handleSceneGenerateAudio = useCallback(
+    async (sceneIndex: number) => {
+      try {
+        let blob: Blob;
+        try {
+          blob = await getSceneAudio(screenplayId, sceneIndex);
+        } catch (fetchErr) {
+          if (fetchErr instanceof Error && fetchErr.message === "NOT_FOUND") {
+            blob = await generateSceneAudio(screenplayId, sceneIndex);
+          } else {
+            throw fetchErr;
+          }
+        }
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.addEventListener("ended", () => URL.revokeObjectURL(url));
+        await audio.play();
+      } catch (err) {
+        console.error("Scene audio failed:", err);
+      }
+    },
+    [screenplayId],
+  );
+
   return (
     <div className="flex h-screen flex-col bg-background">
       <header className="flex flex-col gap-3 border-b border-border bg-background px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:px-6 sm:py-3">
@@ -309,6 +333,7 @@ export default function ScreenplayViewer({
               initialSceneIndex={currentSceneIndex}
               onSceneChange={setCurrentSceneIndex}
               screenplayId={screenplayId}
+              onGenerateAudio={handleSceneGenerateAudio}
             />
           ) : (
             <VerticalNav
@@ -320,6 +345,7 @@ export default function ScreenplayViewer({
               initialSceneIndex={currentSceneIndex}
               onSceneChange={setCurrentSceneIndex}
               screenplayId={screenplayId}
+              onGenerateAudio={handleSceneGenerateAudio}
             />
           )}
         </div>

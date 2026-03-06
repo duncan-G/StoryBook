@@ -15,7 +15,7 @@ import uuid7
 from typing import TYPE_CHECKING
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Index, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, LargeBinary, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -106,6 +106,28 @@ class SceneModel(Base):
     chunks: Mapped[list["RAGChunkModel"]] = relationship(
         "RAGChunkModel", back_populates="scene", cascade="all, delete-orphan"
     )
+    audio: Mapped["SceneAudioModel | None"] = relationship(
+        "SceneAudioModel", back_populates="scene", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class SceneAudioModel(Base):
+    """Generated TTS audio for a single scene. One row per scene (overwritten on regen)."""
+
+    __tablename__ = "scene_audios"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    scene_id: Mapped[int] = mapped_column(
+        ForeignKey("scenes.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    audio_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    audio_format: Mapped[str] = mapped_column(Text, default="flac", nullable=False)
+    sampling_rate: Mapped[int] = mapped_column(nullable=False, default=24000)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    scene: Mapped["SceneModel"] = relationship("SceneModel", back_populates="audio")
 
 
 class RAGChunkModel(Base):
